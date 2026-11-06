@@ -57,7 +57,7 @@ CTA_RULES = {
     "binary_yes_no": "End with ONE question answerable with a single word, e.g. 'Want me to ...? Reply YES.' Nothing after it.",
     "open_ended": "End with ONE short, easy question (what / which / how) they can answer in a line. Nothing after it.",
     "binary_confirm_cancel": "End by asking them to reply CONFIRM to go ahead, or to tell you a better time. One ask only.",
-    "multi_choice_slot": "Offer exactly the slots listed under FACTS, each slot's wording unchanged, as the LAST sentence in this shape: 'Reply 1 for <first slot>; 2 for <second slot>; or tell us a time that works.' (semicolons between choices, because slot wording contains commas). Never write the words 'slots available' or a list like '1. ..., 2. ...'. This is the only ask.",
+    "multi_choice_slot": "Offer exactly the slots listed under FACTS, each slot's wording unchanged, as the LAST sentence in this shape: 'Reply 1 for <first slot>; 2 for <second slot>; or tell us a time that works.' (in Hinglish end with 'ya koi aur time bata dijiye' instead of 'or tell us a time that works'; semicolons between choices, because slot wording contains commas). Never write the words 'slots available' or a list like '1. ..., 2. ...'. This is the only ask.",
     "none": "No question and no ask; close with a plain statement.",
 }
 
