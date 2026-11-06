@@ -15,6 +15,9 @@ if TYPE_CHECKING:
     from .signals import Brief
 
 
+MAX_SILENT_TRIES = 2  # a trigger that produced no valid message this many times is not tried again
+
+
 class Ledger:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -23,6 +26,7 @@ class Ledger:
         self._last_merchant_send: dict[str, datetime] = {}
         self._blocked_merchants: dict[str, str] = {}
         self._blocked_customers: dict[str, str] = {}
+        self._silent: dict[str, int] = {}
 
     @staticmethod
     def _key(merchant_id: str | None, customer_id: str | None, suppression_key: str | None) -> tuple[str, str, str]:
@@ -46,6 +50,17 @@ class Ledger:
                 self._sent_keys.add(self._key(brief.merchant_id, brief.customer_id, brief.suppression_key))
             if now is not None and brief.customer_id is None:
                 self._last_merchant_send[brief.merchant_id] = now
+
+    def note_silence(self, trigger_id: str) -> int:
+        """Composing this trigger produced no valid message. Returns how many times that has happened."""
+        with self._lock:
+            self._silent[trigger_id] = self._silent.get(trigger_id, 0) + 1
+            return self._silent[trigger_id]
+
+    def gave_up(self, trigger_id: str) -> bool:
+        """True once retrying is pointless: the same facts keep giving a message that cannot be sent."""
+        with self._lock:
+            return self._silent.get(trigger_id, 0) >= MAX_SILENT_TRIES
 
     def last_merchant_send(self, merchant_id: str) -> datetime | None:
         with self._lock:

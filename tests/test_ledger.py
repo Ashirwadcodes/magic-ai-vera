@@ -33,6 +33,14 @@ def test_only_merchant_facing_sends_start_a_merchant_cooldown(add_trigger, brief
     assert ledger.last_merchant_send("m_den") == T0
 
 
+def test_a_trigger_that_keeps_producing_nothing_is_given_up_on():
+    ledger = Ledger()
+    assert not ledger.gave_up("t1")
+    assert ledger.note_silence("t1") == 1 and not ledger.gave_up("t1")  # one more chance
+    assert ledger.note_silence("t1") == 2 and ledger.gave_up("t1")
+    assert not ledger.gave_up("t2")  # other triggers are unaffected
+
+
 def test_opt_outs_are_recorded():
     ledger = Ledger()
     assert ledger.merchant_block("m_den") is None and ledger.customer_block("c_priya") is None

@@ -163,6 +163,7 @@ def test_notes_are_scoped_to_the_audience(add_trigger, brief_for):
     assert any("earlier conversation" in note for note in to_merchant.notes)
     assert not any("earlier conversation" in note for note in to_customer.notes)
     assert to_merchant.prior_bodies == ("Profile audit done.",)
+    assert to_customer.prior_bodies == ()  # Vera's messages to the merchant were never sent to the customer
 
 
 # --------------------------------------------------------------------------- when a brief cannot be built

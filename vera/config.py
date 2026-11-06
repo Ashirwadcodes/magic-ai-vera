@@ -24,6 +24,20 @@ def _csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _number(name: str, default: float, minimum: float) -> float:
+    """A numeric setting; junk or out-of-range values fall back to the default rather than crash startup."""
+    try:
+        value = float(_get(name, str(default)))
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
+def _flag(name: str, default: bool) -> bool:
+    value = _get(name)
+    return default if not value else value.lower() not in ("0", "false", "no", "off")
+
+
 @dataclass(frozen=True)
 class Settings:
     # Identity shown on /v1/metadata (the leaderboard reads this).
@@ -31,11 +45,20 @@ class Settings:
     team_members: list[str] = field(default_factory=list)
     contact_email: str = ""
     version: str = "0.1.0"
-    approach: str = "context-grounded composer (in development)"
+    approach: str = (
+        "deterministic router and lead picker, Gemini composer constrained to the stored facts, "
+        "fact validator, template fallback"
+    )
 
-    # LLM (Gemini free tier). With no key the bot must run on deterministic templates only.
+    # LLM (Gemini free tier). With no key the bot runs on deterministic templates only.
+    # gemini-2.5-* is closed to new projects, so the default is the current fast "lite" model.
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash-lite"
+    use_llm: bool = True           # USE_LLM=0 forces templates even when a key is present
+    llm_per_minute: int = 8        # calls per minute we allow ourselves; free-tier limits are per project
+    llm_timeout: float = 8.0       # seconds before one model call is abandoned
+    tick_budget: float = 8.0       # seconds a /v1/tick may spend waiting for the model (judge allows 10-30)
+    llm_workers: int = 6           # model calls in flight at once during a tick
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -47,4 +70,13 @@ class Settings:
             approach=_get("BOT_APPROACH", cls.approach),
             gemini_api_key=_get("GEMINI_API_KEY"),
             gemini_model=_get("GEMINI_MODEL", cls.gemini_model),
+            use_llm=_flag("USE_LLM", True),
+            llm_per_minute=int(_number("LLM_PER_MINUTE", cls.llm_per_minute, 1)),
+            llm_timeout=_number("LLM_TIMEOUT", cls.llm_timeout, 1),
+            tick_budget=_number("TICK_BUDGET", cls.tick_budget, 1),
+            llm_workers=int(_number("LLM_WORKERS", cls.llm_workers, 1)),
         )
+
+    @property
+    def llm_enabled(self) -> bool:
+        return self.use_llm and bool(self.gemini_api_key)

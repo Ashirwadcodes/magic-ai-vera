@@ -67,6 +67,15 @@ def test_a_trigger_is_never_acted_on_twice(store, add_trigger, brief_for):
     assert plan_tick(store, ledger, ["t"]).skipped == [Skip("t", "already_sent")]
 
 
+def test_a_trigger_that_kept_producing_nothing_is_no_longer_planned(store, add_trigger):
+    ledger = Ledger()
+    add_trigger("t", "curious_ask_due", "m_den", ASK)
+    ledger.note_silence("t")
+    assert ids(plan_tick(store, ledger, ["t"])) == ["t"]  # one silent attempt is forgiven
+    ledger.note_silence("t")
+    assert plan_tick(store, ledger, ["t"]).skipped == [Skip("t", "gave_up")]
+
+
 def test_a_shared_suppression_key_does_not_block_other_merchants(store, add_trigger, brief_for):
     ledger = Ledger()
     ledger.mark_sent(brief_for(add_trigger("a", "curious_ask_due", "m_den", ASK, suppression_key="shared")), T0)

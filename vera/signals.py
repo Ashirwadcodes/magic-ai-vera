@@ -250,9 +250,10 @@ def build_brief(trigger: dict, store: ContextStore, trigger_id: str | None = Non
         suppression_key=str(trigger.get("suppression_key") or f"{strategy.kind}:{merchant_id}:{customer_id or ''}"),
         degraded=degraded,
         placeholder=placeholder,
+        # Vera's earlier messages went to the merchant, so they only matter for a message to the merchant.
         prior_bodies=tuple(
             str(turn["body"]) for turn in merchant.get("conversation_history") or []
-            if turn.get("from") == "vera" and turn.get("body")
+            if strategy.audience == "merchant" and turn.get("from") == "vera" and turn.get("body")
         ),
         trigger=trigger,
         merchant=merchant,

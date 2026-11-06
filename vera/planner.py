@@ -3,7 +3,8 @@
 The judge's `available_triggers` is a hint, not an order, and "restraint is rewarded, spam is
 penalized". The policy is deliberately small and explainable:
 
-  1. never act twice on the same trigger or suppression key
+  1. never act twice on the same trigger or suppression key, and stop retrying a trigger that
+     keeps producing no sendable message
   2. never message someone who opted out or cannot be reached
   3. one merchant-facing message per merchant per tick, and one per customer per tick
   4. after messaging a merchant, wait MERCHANT_COOLDOWN before the next one (urgent triggers skip the wait)
@@ -16,6 +17,7 @@ tick, because nothing is marked as sent until the caller says a message really w
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -23,6 +25,8 @@ from typing import Any, Iterable
 from .ledger import Ledger
 from .signals import Brief, build_brief
 from .store import ContextStore
+
+log = logging.getLogger("vera.planner")
 
 MAX_ACTIONS = 20
 MERCHANT_COOLDOWN = timedelta(minutes=15)
@@ -104,7 +108,15 @@ def plan_tick(
         if ledger.already_sent(trigger_id, trigger.get("merchant_id"), trigger.get("customer_id"), trigger.get("suppression_key")):
             plan.skipped.append(Skip(trigger_id, "already_sent"))
             continue
-        brief, why = build_brief(trigger, store, trigger_id)
+        if ledger.gave_up(trigger_id):
+            plan.skipped.append(Skip(trigger_id, "gave_up"))
+            continue
+        try:
+            brief, why = build_brief(trigger, store, trigger_id)
+        except Exception:  # a malformed record must cost one trigger, never the whole tick
+            log.exception("could not build a brief for %s", trigger_id)
+            plan.skipped.append(Skip(trigger_id, "brief_error"))
+            continue
         if brief is None:
             plan.skipped.append(Skip(trigger_id, why or "cannot_build_brief"))
             continue
