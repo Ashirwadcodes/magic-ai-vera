@@ -115,6 +115,44 @@ class Prompt:
     user: str
 
 
+REPLY_SYSTEM = """You write ONE WhatsApp reply inside an ongoing conversation, either from Vera (magicpin's assistant) to a merchant, or from a local business to one of its own customers. A busy person reads it on a phone. It is scored on specificity, fit to the business, relevance to what they just said, and whether it moves the conversation forward.
+
+HOW A STRONG REPLY IS BUILT
+1. Answer THEIR LATEST MESSAGE first, in their language. Do not repeat your earlier message.
+2. Use concrete facts from FACTS and from the conversation (exact names, numbers, dates, offers). Never invent anything that is not given.
+3. Do the work yourself (a short draft, the next step) instead of asking them to do it.
+4. End with one clear next step, shaped as WHAT TO DO says. One ask only.
+Tone: a sharp, friendly colleague. Short. At most one exclamation mark. No hype.
+
+HARD RULES (a reply that breaks one is thrown away)
+- Use ONLY the FACTS, OFFERS, CAUTIONS and the conversation. Never invent, estimate or calculate a number, price, date, offer, study or customer count.
+- No links, website names, e-mail addresses or phone numbers.
+- Never use internal words: trigger, payload, lead, CTA, template, JSON, ids.
+- Do not promise outcomes ("guaranteed", "will double") and never use a word from NEVER SAY.
+- Do not repeat or lightly rephrase anything under ALREADY SENT.
+- Do not introduce yourself again unless they ask who you are.
+- A reply from a business to its customer is written as that business ("we"), never mentions Vera or magicpin, offers only what the facts show and gives no medical advice.
+
+OUTPUT: a JSON object and nothing else:
+{"body": "<the WhatsApp reply>", "rationale": "<one or two plain sentences: what they meant and why this reply>"}
+"""
+
+# What the reply must do, by what the other person just said.
+REPLY_TASKS = {
+    "go_ahead": "They said yes. Start the work NOW instead of asking anything: say what you are doing, give a short first draft or the concrete content built only from the FACTS, then end with ONE line asking them to reply CONFIRM to go ahead. Do not ask qualifying questions and never use the phrases 'would you', 'do you', 'can you tell', 'what if', 'how about'.",
+    "question": "They asked a question. Answer it directly in one or two sentences using only the FACTS. If the facts do not cover it, say plainly that you will check and come back; never guess. Then end with one easy next step (reply YES).",
+    "off_topic": "They asked for something outside what you do ({topic}). Decline in one friendly sentence and point to the right person (for GST, their CA), then steer back to the earlier topic and end with one ask.",
+    "other": "They said something that is neither a yes nor a question. Acknowledge it in one sentence using their own words, then move the earlier topic forward and end with one ask.",
+    "customer_go_ahead": "The customer agreed. Write as the business. If they chose one of the slots under FACTS, confirm exactly that slot; if they did not choose, list the slots under FACTS (numbered, wording unchanged) and ask them to pick one. Promise nothing else.",
+    "customer_question": "The customer asked something. Answer only from the FACTS; if the facts do not cover it, say the team will confirm shortly. Write as the business, warm and short, with no medical advice.",
+    "customer_other": "The customer said something that is not a clear yes or a question. Acknowledge it warmly as the business and say the team will follow up, using only the FACTS.",
+}
+
+
+def reply_max_chars(customer_facing: bool) -> int:
+    return 650 if customer_facing else 900
+
+
 # --------------------------------------------------------------------------- small shared helpers
 
 def language_rule(code: str) -> str:
@@ -234,3 +272,51 @@ def build_prompt(
         lines += [f"- {p}" for p in problems]
         lines.append("Write a new version that fixes every problem and still follows all rules above.")
     return Prompt(SYSTEM, "\n".join(lines))
+
+
+def build_reply_prompt(
+    brief: "Brief", *, lang: str, transcript: Iterable[tuple[str, str]], message: str, task: str, avoid: Iterable[str] = (),
+) -> Prompt:
+    """The user turn for one reply. `transcript` is [(speaker, text), ...], oldest first, ending before `message`."""
+    identity = brief.merchant.get("identity") or {}
+    customer_facing = brief.send_as == "merchant_on_behalf"
+    voice = brief.category.get("voice") or {}
+    place = ", ".join(str(x) for x in (identity.get("locality"), identity.get("city")) if x)
+    recipient = brief.salutation or "(name not known: greet plainly)"
+    if brief.about:
+        recipient += f" (writing about {brief.about})"
+    sender = (
+        f'the business "{business_name(brief)}" writing to its own customer (use "we"; never mention Vera or magicpin)'
+        if customer_facing else "Vera, magicpin's assistant, writing to the merchant"
+    )
+    lines = [
+        f"SENDER: {sender}",
+        f"RECIPIENT: {recipient}",
+        f"BUSINESS: {business_name(brief)}" + (f", {place}" if place else "") + f" ({brief.category.get('display_name') or brief.category_slug})",
+        f"LANGUAGE (match their latest message): {language_rule(lang)}",
+        f"WHAT THE EARLIER MESSAGES WERE ABOUT: {REASON.get(brief.kind, REASON['generic_merchant'])}",
+        "",
+        "FACTS",
+        f"MAIN FACT: {brief.lead.text if brief.lead else '(none)'}",
+    ]
+    lines += [f"SUPPORT: {fact.text}" for fact in brief.support]
+    offers = [o["title"] for o in active_offers(brief.merchant)]
+    if offers:
+        lines.append("OFFERS (quote exactly if you mention one): " + "; ".join(offers))
+    if brief.notes:
+        lines += ["", "CAUTIONS"] + [f"- {note}" for note in brief.notes]
+    lines += ["", "CONVERSATION SO FAR (oldest first)"]
+    lines += [f"{speaker}: {_clip(text, 320)}" for speaker, text in transcript]
+    lines += [
+        "",
+        f'THEIR LATEST MESSAGE: "{_clip(message, 400)}"',
+        f"WHAT TO DO: {task}",
+        "",
+        f"VOICE: tone {voice.get('tone', 'peer')}, register {voice.get('register', 'friendly')}",
+        "NEVER SAY: " + ", ".join(taboo_words(brief.category)),
+    ]
+    sent = list(avoid)[-4:]
+    if sent:
+        lines += ["", "ALREADY SENT (do not repeat or rephrase):"] + [f'- "{_clip(b)}"' for b in sent]
+    lines += ["", "LENGTH: 25 to 80 words" + (" (a short draft may take up to 130)." if not customer_facing else ".")]
+    return Prompt(REPLY_SYSTEM, "\n".join(lines))

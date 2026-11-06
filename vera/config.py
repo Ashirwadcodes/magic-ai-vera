@@ -59,6 +59,7 @@ class Settings:
     llm_timeout: float = 8.0       # seconds before one model call is abandoned
     tick_budget: float = 8.0       # seconds a /v1/tick may spend waiting for the model (judge allows 10-30)
     llm_workers: int = 6           # model calls in flight at once during a tick
+    reply_timeout: float = 6.0     # seconds a /v1/reply may wait for the model; the judge's limit is 10-30
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -75,6 +76,7 @@ class Settings:
             llm_timeout=_number("LLM_TIMEOUT", cls.llm_timeout, 1),
             tick_budget=_number("TICK_BUDGET", cls.tick_budget, 1),
             llm_workers=int(_number("LLM_WORKERS", cls.llm_workers, 1)),
+            reply_timeout=_number("REPLY_TIMEOUT", cls.reply_timeout, 1),
         )
 
     @property

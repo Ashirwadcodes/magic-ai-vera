@@ -57,11 +57,13 @@ def _licensed(lines: Iterable[str]) -> set[str]:
         for m in _DAYS.finditer(line):
             days = int(m.group(1))
             out.update({str(round(days / 7)), str(round(days / 30))})
+        if line.startswith("slots available:"):  # the menu numbers of "Reply 1 for ...; 2 for ...; 3 for ..."
+            out.update(str(n) for n in range(1, line.count("|") + 2))
     return out
 
 
-def invented_numbers(body: str, brief: "Brief") -> list[str]:
-    allowed = _licensed(grounding_lines(brief))
+def unlicensed_numbers(body: str, allowed: set[str]) -> list[str]:
+    """Numbers in `body` that are not in `allowed` (and are not trivial or a small effort estimate)."""
     effort = set()  # "a 5-min setup" is an effort estimate, not a claim about the business
     for m in _DURATION.finditer(body):
         n, unit = int(m.group(1)), m.group(2).lower()
@@ -69,6 +71,10 @@ def invented_numbers(body: str, brief: "Brief") -> list[str]:
             effort.add(str(n))
     unknown = [n for n in numbers_of(body) if n not in allowed and n not in effort and n not in TRIVIAL]
     return list(dict.fromkeys(unknown))
+
+
+def invented_numbers(body: str, brief: "Brief") -> list[str]:
+    return unlicensed_numbers(body, _licensed(grounding_lines(brief)))
 
 
 # --------------------------------------------------------------------------- patterns
@@ -95,13 +101,14 @@ _ASK = re.compile(
 _DEVANAGARI = re.compile(r"[ऀ-ॿ]")
 
 # Hindi function words that are not English words, for telling Hinglish from plain English.
-_HINDI = frozenset("""
+HINDI_WORDS = frozenset("""
 aap aapka aapke aapki aapko hai hain hoon hun hoga hogi honge tha thi ka ke ki ko se mein pe kya kyun kaise
 kab kahan kaun kuch koi sab bahut bhi toh nahi nahin haan ji ek yeh woh abhi aaj kal parso hafte hafta mahine
 mahina saal raat subah shaam liye taaki lekin magar aur ya agar jab jaise zaroor bilkul sirf sakte sakta sakti
 chahiye chahte chahta chahenge chahein karein karna kar karo kijiye karenge dein diya diye bhej bhejein bhejiye
 bana banao banayein banaiye batao bataiye batayein bata dekh dekhein dekhiye dekho milega milegi rahe raha rahi
 rahega namaste dhanyavad shukriya naya nayi naye wala wali wale doon dun denge karunga karungi
+dungi karungi rakhungi bhejungi banungi lagta lag hamare hamari hamara aapne mujhe isliye jaldi sandesh
 """.split())
 
 _GENERIC_NAME_WORDS = frozenset({
@@ -223,12 +230,84 @@ def _ask(body: str, brief: "Brief") -> list[Problem]:
 
 
 def _language(body: str, brief: "Brief") -> list[Problem]:
-    hindi_words = len(_words(body) & _HINDI)
+    return language_problems(body, brief.language)
+
+
+def language_problems(body: str, code: str) -> list[Problem]:
+    """Is `body` written in the language `code` (en | hi-en | hi)? Other codes are not checked."""
+    hindi_words = len(_words(body) & HINDI_WORDS)
     devanagari = bool(_DEVANAGARI.search(body))
-    if brief.language == "en" and (devanagari or hindi_words >= 3):
+    if code == "en" and (devanagari or hindi_words >= 3):
         return [Problem("language", "Write in English only; this recipient prefers English.")]
-    if brief.language == "hi-en" and not devanagari and hindi_words < 2:
+    if code == "hi-en" and not devanagari and hindi_words < 2:
         return [Problem("language", "Write in natural Hinglish (Hindi-English mix in Roman script); this recipient prefers it.")]
-    if brief.language == "hi" and not devanagari and hindi_words < 3:
+    if code == "hi" and not devanagari and hindi_words < 3:
         return [Problem("language", "Write in Hindi (Roman script is fine); this recipient prefers Hindi.")]
     return []
+
+
+# --------------------------------------------------------------------------- replies
+
+# From the judge's own scenario check: after the merchant says "let's do it", a reply that keeps
+# qualifying loses points, and one that does the work uses words like these.
+QUALIFYING = ("would you", "do you", "can you tell", "what if", "how about")
+ACTION_WORDS = ("done", "sending", "draft", "here", "confirm", "proceed", "next")
+
+
+def check_reply(
+    body: str,
+    *,
+    lang: str,
+    grounding: Iterable[str],
+    taboo: Iterable[str] = (),
+    seen: Iterable[str] = (),
+    customer_facing: bool = False,
+    limit: int = 900,
+    max_questions: int = 1,
+    action: bool = False,
+) -> list[Problem]:
+    """Every problem with `body` as a reply in a live conversation (empty list = safe to send).
+
+    A reply is judged more lightly than an opening message (no greeting or call-to-action position
+    rules) but by the same hard rules: nothing invented, no links, nothing forbidden, no repeat,
+    the right language. `grounding` lists every line whose numbers may be quoted; `action=True` is
+    for a reply to "let's do it", which must start doing the work rather than ask more questions.
+    """
+    body = body or ""
+    if len(body.strip()) < 12:
+        return [Problem("too_short", "The reply is empty or far too short.")]
+    problems: list[Problem] = []
+
+    def add(code: str, detail: str) -> None:
+        problems.append(Problem(code, detail))
+
+    if len(body) > limit:
+        add("too_long", f"The reply is {len(body)} characters; keep it under {limit}.")
+    for pattern, what in ((_URL, "a link or website name"), (_EMAIL, "an e-mail address"), (_PHONE, "a phone number")):
+        found = pattern.search(body)
+        if found:
+            add("url", f"The reply contains {what} ('{found.group().strip()}'). Remove it.")
+    unknown = unlicensed_numbers(body, _licensed(grounding))
+    if unknown:
+        add("number", f"These numbers are not in the facts or the conversation: {', '.join(unknown)}. Do not invent or calculate numbers.")
+    banned = [w for w in taboo if re.search(r"(?i)(?<!\w)" + re.escape(w) + r"(?!\w)", body)]
+    if banned:
+        add("taboo", f"Uses forbidden wording: {', '.join(banned)}.")
+    jargon = _JARGON.search(body)
+    if jargon:
+        add("jargon", f"Uses internal wording or an unfilled placeholder ('{jargon.group()}'). Write plain words.")
+    if _repeats(body, seen):
+        add("repeat", "It repeats or closely paraphrases something already sent in this conversation. Say something new.")
+    if body.count("?") > max_questions:
+        add("ask", "Ask at most one question.")
+    if customer_facing and re.search(r"(?i)\bvera\b|\bmagicpin\b", body):
+        add("vera", "This reply is from the business to its customer: never mention Vera or magicpin.")
+    problems += language_problems(body, "hi-en" if lang == "hi" else lang)
+    if action:
+        lowered = body.lower()
+        asked = [phrase for phrase in QUALIFYING if phrase in lowered]
+        if asked:
+            add("qualifying", f"They already said yes: do not ask qualifying questions ('{asked[0]}'). Do the work.")
+        if not any(word in lowered for word in ACTION_WORDS):
+            add("no_action", "Start doing the work: say what is done, being drafted or sent, and the one next step.")
+    return problems

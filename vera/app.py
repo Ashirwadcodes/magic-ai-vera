@@ -7,7 +7,8 @@
     GET  /v1/metadata  team identity for the leaderboard
 
 `tick` plans which triggers to act on, composes the messages and returns them as actions.
-`reply` is a placeholder until the reply state machine exists.
+`reply` hands the incoming message to the reply state machine (dialogue.py).
+    POST /v1/teardown  optional end-of-test call: wipe every piece of state
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from fastapi.responses import JSONResponse
 from .composer import Composer, build_action, build_composer, conversation_id
 from .config import Settings
 from .conversations import ConversationBook
+from .dialogue import Replier
 from .ledger import Ledger
 from .models import ContextPush, ReplyRequest, TickRequest
 from .planner import parse_time, plan_tick
@@ -51,6 +53,7 @@ def create_app(settings: Settings | None = None, composer: Composer | None = Non
     ledger = Ledger()
     conversations = ConversationBook()
     composer = composer or build_composer(settings)
+    replier = Replier(store, ledger, conversations, composer, reply_timeout=settings.reply_timeout)
     started = time.monotonic()
     started_at = _utc_now()
 
@@ -65,6 +68,7 @@ def create_app(settings: Settings | None = None, composer: Composer | None = Non
     app.state.ledger = ledger
     app.state.conversations = conversations
     app.state.composer = composer
+    app.state.replier = replier
     log.info("composer: %s", f"Gemini {settings.gemini_model}" if composer.uses_llm else "templates only (no model)")
 
     @app.exception_handler(RequestValidationError)
@@ -160,10 +164,20 @@ def create_app(settings: Settings | None = None, composer: Composer | None = Non
         )
         return {"actions": actions}
 
+    # Also a plain `def`: a reply may wait a few seconds for the model, and must not hold up /v1/healthz.
     @app.post("/v1/reply")
-    async def reply(body: ReplyRequest):
-        # Placeholder until the reply state machine exists.
-        return {"action": "wait", "wait_seconds": 1800, "rationale": "reply handling not built yet"}
+    def reply(body: ReplyRequest):
+        return replier.handle(body)
+
+    # Optional end-of-test call from the judge: the bot must not keep context data after the test.
+    @app.post("/v1/teardown")
+    def teardown():
+        store.clear()
+        ledger.clear()
+        conversations.clear()
+        replier.clear()
+        log.info("teardown: all state wiped")
+        return {"status": "cleared"}
 
     return app
 

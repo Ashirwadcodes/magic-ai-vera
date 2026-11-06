@@ -31,6 +31,7 @@ log = logging.getLogger("vera.planner")
 MAX_ACTIONS = 20
 MERCHANT_COOLDOWN = timedelta(minutes=15)
 URGENT = 4  # urgency at or above this skips the cooldown
+MAX_SNOOZE = timedelta(days=8)  # the longest pause the reply handler sets is 7 days
 
 # These customer messages are reminders, so a customer who turned reminders off must not get them.
 REMINDER_KINDS = frozenset({
@@ -66,11 +67,16 @@ def priority(brief: Brief) -> int:
     return brief.urgency * 10 + (0 if brief.placeholder else 5) - (3 if brief.degraded else 0)
 
 
-def blocked_reason(brief: Brief, ledger: Ledger) -> str | None:
-    """Why this message must not be sent to this person at all, or None."""
+def blocked_reason(brief: Brief, ledger: Ledger, now: datetime | None = None) -> str | None:
+    """Why this message must not be sent to this person right now, or None."""
     if ledger.merchant_block(brief.merchant_id):
         return "merchant_opted_out"
     if brief.customer_id is None:
+        # A merchant who was busy, auto-replied or said "later" is left alone until the pause ends. A pause
+        # far longer than any we set means the judge's clock was reset (a new run), so it no longer applies.
+        until = ledger.snoozed_until(brief.merchant_id)
+        if now is not None and until is not None and timedelta(0) < until - now <= MAX_SNOOZE:
+            return "merchant_snoozed"
         return None
     if ledger.customer_block(brief.customer_id):
         return "customer_opted_out"
@@ -120,7 +126,7 @@ def plan_tick(
         if brief is None:
             plan.skipped.append(Skip(trigger_id, why or "cannot_build_brief"))
             continue
-        blocked = blocked_reason(brief, ledger)
+        blocked = blocked_reason(brief, ledger, now)
         if blocked:
             plan.skipped.append(Skip(trigger_id, blocked))
             continue

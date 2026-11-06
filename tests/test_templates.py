@@ -86,6 +86,14 @@ def test_slots_are_offered_verbatim_with_the_live_offer(make):
     assert body.rstrip(".").endswith("bata dijiye")
 
 
+def test_three_slots_become_a_numbered_menu_that_still_passes_the_checks(make):
+    three = [*SLOTS, {"iso": "2026-11-07T11:00:00+05:30", "label": "Fri 7 Nov, 11am"}]
+    brief = make("recall_due", {**RECALL, "available_slots": three}, "m_den", "c_priya")
+    body = render(brief)
+    assert "1 for Wed 5 Nov, 6pm" in body and "3 for Fri 7 Nov, 11am" in body
+    assert check(body, brief) == []
+
+
 def test_a_relatives_phone_gets_a_respectful_third_person_message(make):
     body = render(make("chronic_refill_due", REFILL, "m_pha", "c_sharma"))
     assert "Mr. Sharma" in body and "metformin, atorvastatin" in body

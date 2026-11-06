@@ -166,6 +166,27 @@ class Composer:
     def compose(self, brief: "Brief", avoid: Sequence[str] = ()) -> Message | None:
         return self.compose_batch([brief], lambda _brief: avoid)[0]
 
+    def respond(self, system: str, user: str, *, timeout: float | None = None) -> tuple[str, str] | None:
+        """One model call for a reply, made on the caller's own thread: (body, rationale), or None.
+
+        None means "write it yourself": no model, no free call in the rate window, or no usable
+        answer. Replies may use the calls that new messages leave in reserve.
+        """
+        if self._pool is None or self.gate is None or self.client is None:
+            return None
+        if not self.gate.acquire(reserve=0, wait=0.0):
+            self._count("reply_budget_spent")
+            return None
+        try:
+            raw = self.client.generate(system, user, timeout=timeout or self.call_timeout)
+        except LLMError as exc:
+            self._model_failed(exc)
+            return None
+        self.gate.succeeded()
+        parsed = parse_reply(raw)
+        self._count("reply_llm" if parsed else "reply_unreadable")
+        return parsed
+
     # ------------------------------------------------------------------ the model path (worker threads)
 
     def _draft(self, brief: "Brief", avoid: list[str], deadline: float) -> _Draft:

@@ -128,3 +128,39 @@ def test_parse_time():
     assert parse_time("2026-04-26T10:00:00Z") == T0
     assert parse_time("2026-04-26T10:00:00").tzinfo is not None  # naive input is taken as UTC
     assert parse_time("garbage") is None and parse_time(None) is None
+
+
+def test_a_snoozed_merchant_is_left_alone_until_the_pause_ends(store, add_trigger):
+    ledger = Ledger()
+    ledger.snooze_merchant("m_den", T0 + timedelta(hours=2))
+    add_trigger("t", "perf_dip", "m_den", DIP, urgency=4)  # even an urgent trigger waits
+    assert plan_tick(store, ledger, ["t"], T0).skipped == [Skip("t", "merchant_snoozed")]
+    assert plan_tick(store, ledger, ["t"], T0 + timedelta(hours=1, minutes=59)).skipped == [Skip("t", "merchant_snoozed")]
+    assert ids(plan_tick(store, ledger, ["t"], T0 + timedelta(hours=2, minutes=1))) == ["t"]
+    assert ids(plan_tick(store, ledger, ["t"], None)) == ["t"]  # no clock, no way to tell how long ago: carry on
+
+
+def test_a_snooze_covers_the_merchant_only_not_their_customers_or_other_merchants(store, add_trigger):
+    ledger = Ledger()
+    ledger.snooze_merchant("m_den", T0 + timedelta(days=1))
+    add_trigger("to_merchant", "curious_ask_due", "m_den", ASK)
+    add_trigger("to_customer", "recall_due", "m_den", PLACEHOLDER, customer_id="c_priya", urgency=3)
+    add_trigger("other_merchant", "curious_ask_due", "m_sam", ASK)
+    plan = plan_tick(store, ledger, ["to_merchant", "to_customer", "other_merchant"], T0)
+    assert sorted(ids(plan)) == ["other_merchant", "to_customer"]
+    assert plan.skipped == [Skip("to_merchant", "merchant_snoozed")]
+
+
+def test_a_snooze_set_by_a_wild_clock_does_not_last_forever(store, add_trigger):
+    ledger = Ledger()
+    ledger.snooze_merchant("m_den", T0 + timedelta(days=400))  # the judge's clock jumped ahead and was later reset
+    add_trigger("t", "perf_dip", "m_den", DIP)
+    assert ids(plan_tick(store, ledger, ["t"], T0)) == ["t"]
+
+
+def test_an_opt_out_outranks_a_snooze(store, add_trigger):
+    ledger = Ledger()
+    ledger.snooze_merchant("m_den", T0 + timedelta(hours=1))
+    ledger.block_merchant("m_den", "asked_to_stop")
+    add_trigger("t", "perf_dip", "m_den", DIP)
+    assert plan_tick(store, ledger, ["t"], T0).skipped == [Skip("t", "merchant_opted_out")]

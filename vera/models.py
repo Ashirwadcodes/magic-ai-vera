@@ -28,10 +28,11 @@ class TickRequest(_Lenient):
 
 
 class ReplyRequest(_Lenient):
-    conversation_id: str
-    merchant_id: str | None = None
-    customer_id: str | None = None
-    from_role: str = "merchant"
-    message: str = ""
-    received_at: str | None = None
-    turn_number: int = 1
+    """Every field is optional and loosely typed: a reply must always get an answer, even to an odd request."""
+    conversation_id: Any = ""
+    merchant_id: Any = None
+    customer_id: Any = None
+    from_role: Any = "merchant"
+    message: Any = ""
+    received_at: Any = None
+    turn_number: Any = 1

@@ -26,6 +26,7 @@ class Ledger:
         self._last_merchant_send: dict[str, datetime] = {}
         self._blocked_merchants: dict[str, str] = {}
         self._blocked_customers: dict[str, str] = {}
+        self._snoozed: dict[str, datetime] = {}
         self._silent: dict[str, int] = {}
 
     @staticmethod
@@ -74,6 +75,23 @@ class Ledger:
         with self._lock:
             return self._blocked_merchants.get(merchant_id)
 
+    def snooze_merchant(self, merchant_id: str, until: datetime) -> None:
+        """Leave this merchant alone until `until` (they were busy, auto-replied, or said "later")."""
+        with self._lock:
+            current = self._snoozed.get(merchant_id)
+            if current is None or until > current:
+                self._snoozed[merchant_id] = until
+
+    def snoozed_until(self, merchant_id: str) -> datetime | None:
+        with self._lock:
+            return self._snoozed.get(merchant_id)
+
+    def release_merchant(self, merchant_id: str) -> None:
+        """The merchant wrote to us themselves: whatever pause or block we had on them no longer applies."""
+        with self._lock:
+            self._snoozed.pop(merchant_id, None)
+            self._blocked_merchants.pop(merchant_id, None)
+
     def block_customer(self, customer_id: str, reason: str = "opted_out") -> None:
         with self._lock:
             self._blocked_customers[customer_id] = reason
@@ -81,3 +99,13 @@ class Ledger:
     def customer_block(self, customer_id: str) -> str | None:
         with self._lock:
             return self._blocked_customers.get(customer_id)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._sent_triggers.clear()
+            self._sent_keys.clear()
+            self._last_merchant_send.clear()
+            self._blocked_merchants.clear()
+            self._blocked_customers.clear()
+            self._snoozed.clear()
+            self._silent.clear()

@@ -38,10 +38,18 @@ class Conversation:
     status: str = "open"             # open | closed
     closed_reason: str = ""
     turns: list[Turn] = field(default_factory=list)
+    # State of the reply conversation, owned by the reply handler.
+    phase: str = "opened"            # opened -> acted (we started the work, asked CONFIRM) -> done
+    counts: dict[str, int] = field(default_factory=dict)   # how often each kind of message has arrived here
 
     @property
     def bot_bodies(self) -> list[str]:
         return [t.body for t in self.turns if t.role == "vera"]
+
+    @property
+    def last_bot_body(self) -> str:
+        bodies = self.bot_bodies
+        return bodies[-1] if bodies else ""
 
 
 class ConversationBook:
@@ -64,9 +72,35 @@ class ConversationBook:
             self._by_id[conversation_id] = conversation
             return conversation
 
+    def adopt(
+        self, conversation_id: str, *, merchant_id: str, customer_id: str | None = None, send_as: str = "vera",
+        language: str = "en", salutation: str = "", trigger_id: str = "", kind: str = "unknown", lead: str = "",
+        cta: str = "open_ended", at: datetime | None = None,
+    ) -> Conversation:
+        """Start tracking a conversation the bot did not open (the judge may reply on any id)."""
+        with self._lock:
+            existing = self._by_id.get(conversation_id)
+            if existing is not None:
+                return existing
+            conversation = Conversation(
+                id=conversation_id, merchant_id=merchant_id, customer_id=customer_id, trigger_id=trigger_id,
+                kind=kind, send_as=send_as, language=language, cta=cta, salutation=salutation, lead=lead, started_at=at,
+            )
+            self._by_id[conversation_id] = conversation
+            return conversation
+
     def get(self, conversation_id: str) -> Conversation | None:
         with self._lock:
             return self._by_id.get(conversation_id)
+
+    def latest_for(self, merchant_id: str, customer_id: str | None) -> Conversation | None:
+        """The newest conversation the bot itself opened with this merchant (or this customer of the merchant)."""
+        with self._lock:
+            found = [
+                c for c in self._by_id.values()
+                if c.merchant_id == merchant_id and c.customer_id == customer_id and c.trigger_id and c.kind != "unknown"
+            ]
+            return found[-1] if found else None
 
     def append(self, conversation_id: str, role: str, body: str, at: datetime | None = None) -> Conversation | None:
         with self._lock:
@@ -81,19 +115,29 @@ class ConversationBook:
             if conversation is not None:
                 conversation.status, conversation.closed_reason = "closed", reason
 
-    def bodies_for(self, brief: "Brief") -> list[str]:
+    def reopen(self, conversation_id: str) -> None:
+        with self._lock:
+            conversation = self._by_id.get(conversation_id)
+            if conversation is not None:
+                conversation.status, conversation.closed_reason = "open", ""
+
+    def bodies_to(self, merchant_id: str, customer_id: str | None) -> list[str]:
         """Everything the bot has sent to this merchant (or this customer of the merchant), oldest first."""
         with self._lock:
-            found = [
-                c for c in self._by_id.values()
-                if c.merchant_id == brief.merchant_id and c.customer_id == brief.customer_id
-            ]
+            found = [c for c in self._by_id.values() if c.merchant_id == merchant_id and c.customer_id == customer_id]
             found.sort(key=lambda c: (c.started_at is None, c.started_at))
             return [body for c in found for body in c.bot_bodies]
+
+    def bodies_for(self, brief: "Brief") -> list[str]:
+        return self.bodies_to(brief.merchant_id, brief.customer_id)
 
     def for_merchant(self, merchant_id: str) -> list[Conversation]:
         with self._lock:
             return [c for c in self._by_id.values() if c.merchant_id == merchant_id]
+
+    def clear(self) -> None:
+        with self._lock:
+            self._by_id.clear()
 
     def __len__(self) -> int:
         with self._lock:
