@@ -3,10 +3,29 @@
 A merchant-messaging bot for the magicpin AI Challenge: it receives category / merchant /
 customer / trigger context from the judge harness and decides what (and whether) to send.
 
-**Status:** step 4 of 6 — `/v1/tick` now works end to end: it picks the triggers worth acting
-on, writes each message (Gemini when a key is set, deterministic templates otherwise), checks
-every message against the facts, and returns the actions. Next: the reply state machine
-(step 5), then deployment (step 6).
+**Status:** step 5 of 6 — `/v1/tick` writes and checks the opening messages, and `/v1/reply`
+now runs a reply state machine (auto-reply, "let's do it", opt-out, off-topic, customers).
+Next: deployment (step 6).
+
+## How replies work
+
+```
+message ──► intents.classify ──► per-merchant memory ──► dialogue (decide) ──► replytext / Gemini ──► check_reply ──► send | wait | end
+```
+
+* **Works on any conversation id**, including ones the bot never opened: the merchant comes from
+  the request, and the latest conversation the bot opened with them supplies the topic.
+* **Canned auto-replies:** one short note for the owner, then wait a day, then end. The count is
+  kept per merchant, because the judge changes the conversation id on every repeat.
+* **"Let's do it":** switches to action (what happens next + one CONFIRM), never qualifying questions.
+* **Opt-out / hostile:** end and stop all outreach. "Not interested" ends and pauses a week. "Busy"
+  waits as long as they said. A later message from the merchant lifts the pause.
+* **Off-topic** (GST, loans...) is declined politely and steered back; asking again gets new
+  words, then silence. **Customers** are answered as the business and never hear about Vera.
+* Replies are templates first (EN / Hinglish, several variants so nothing repeats); Gemini drafts
+  only go-ahead / question / off-topic / other replies (`REPLY_TIMEOUT`, default 6 s), and a
+  draft that fails `check_reply` is replaced by the template.
+* `POST /v1/teardown` wipes all state.
 
 ## How a message is made
 
@@ -41,7 +60,7 @@ be claimed.
 
 ```
 vera/
-  app.py          the 5 endpoints (/v1/context, /tick, /reply, /healthz, /metadata)
+  app.py          the endpoints (/v1/context, /tick, /reply, /healthz, /metadata, /teardown)
   store.py        versioned in-memory context store (idempotent, thread-safe)
   models.py       lenient request bodies
   config.py       settings from environment / .env
@@ -56,9 +75,12 @@ vera/
   validate.py     the checks every message must pass, whoever wrote it
   templates.py    the deterministic writer (English and Hinglish) used as the fallback
   composer.py     model -> validate -> retry once -> template -> or silence; builds the action object
-  conversations.py  what was said in each conversation (used for anti-repetition and, next, replies)
+  conversations.py  what was said in each conversation (anti-repetition, reply threads)
+  intents.py      classifies an incoming message (auto-reply, stop, go-ahead, off-topic...) in EN / Hinglish
+  replytext.py    reply wording tables (merchant and customer, EN / Hinglish, several variants)
+  dialogue.py     the reply state machine behind /v1/reply
   dataset.py      loads data/expanded straight into a store (used by the report and tests)
-tests/            pytest: store, endpoints, facts, router, briefs, ledger, planner, validator, templates, model client, composer, conversations, tick
+tests/            pytest: store, endpoints, facts, router, briefs, ledger, planner, validator, templates, model client, composer, conversations, tick, intents, dialogue, reply API, reply wording
 scripts/
   load_dataset.py     push the expanded dataset into a running bot (warm-up rehearsal)
   decision_report.py  print what the bot decides (and, with --compose, writes) for the 30 canonical test pairs
