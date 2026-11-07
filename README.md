@@ -1,3 +1,13 @@
+---
+title: Vera Bot
+emoji: 💬
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Vera bot — magicpin AI Challenge
 
 A merchant-messaging bot for the magicpin AI Challenge: it receives category / merchant /
